@@ -173,7 +173,6 @@ static atom_t	   ATOM_done;
 static atom_t	   ATOM_next;
 static atom_t	   ATOM_scheduled;
 static functor_t   FUNCTOR_module2;
-static functor_t   FUNCTOR_alarm1;
 static functor_t   FUNCTOR_alarm4;
 static predicate_t PREDICATE_call1;
 
@@ -183,9 +182,11 @@ static predicate_t PREDICATE_call1;
 #define EV_REMOVE	0x0002		/* Automatically remove */
 #define EV_FIRED	0x0004		/* Windows: got this one */
 #define EV_NOINSTALL	0x0008		/* Only allocate; do not install */
+#define EV_REMOVED	0x0010		/* Removed; waiting for AGC */
 
 typedef struct event
-{ record_t	 goal;			/* Thing to call */
+{ atom_t	 symbol;		/* <alarm>(%p) */
+  record_t	 goal;			/* Thing to call */
   module_t	 module;		/* Module to call in */
   struct event  *next;			/* linked list for current */
   struct event  *previous;		/* idem */
@@ -220,22 +221,89 @@ static int sig_time = 0;
 static pl_sigaction_t saved_sigaction;	/* Old signal action */
 
 static int removeEvent(Event ev);
+static bool existence_error_removed(term_t t);
+
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+The alarm Id is a blob that holds the event.  As long as the event is not
+removed, it holds a reference to its blob.  Removing the event (explicitly
+or due to remove(true)) unlinks it and drops this reference.  The memory
+is reclaimed by atom-GC, so an Id of a removed alarm remains safe to use.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static void
+acquire_alarm_symbol(atom_t symbol)
+{ Event ev = PL_blob_data(symbol, NULL, NULL);
+
+  ev->symbol = symbol;
+}
+
+static int
+release_alarm_symbol(atom_t symbol)
+{ Event ev = PL_blob_data(symbol, NULL, NULL);
+
+  if ( ev->flags & EV_REMOVED )
+  { ev->magic = 0;
+    free(ev);
+  }
+
+  return TRUE;
+}
+
+static int
+compare_alarm_symbols(atom_t a, atom_t b)
+{ Event eva = PL_blob_data(a, NULL, NULL);
+  Event evb = PL_blob_data(b, NULL, NULL);
+
+  return ( eva > evb ?  1 :
+	   eva < evb ? -1 : 0
+	 );
+}
+
+static int
+write_alarm_symbol(IOSTREAM *s, atom_t symbol, int flags)
+{ Event ev = PL_blob_data(symbol, NULL, NULL);
+
+  (void)flags;
+  Sfprintf(s, "<alarm>(%p)", ev);
+  return TRUE;
+}
+
+static PL_blob_t alarm_blob =
+{ PL_BLOB_MAGIC,
+  PL_BLOB_NOCOPY,
+  "alarm",
+  release_alarm_symbol,
+  compare_alarm_symbols,
+  write_alarm_symbol,
+  acquire_alarm_symbol
+};
+
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 Allocate the event, maintaining a time-sorted list of scheduled events.
+The event is returned in `id`.
 - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 static Event
-allocEvent()
-{ Event ev = malloc(sizeof(*ev));
+allocEvent(term_t id)
+{ Event ev;
 
-  if ( !ev )
+  if ( !PL_is_variable(id) )
+    return PL_uninstantiation_error(id),NULL;
+
+  if ( !(ev = malloc(sizeof(*ev))) )
   { pl_error(NULL, 0, NULL, ERR_ERRNO, errno, "allocate", "memory", 0);
     return NULL;
   }
 
   memset(ev, 0, sizeof(*ev));
   ev->magic = EV_MAGIC;
+
+  if ( !PL_unify_blob(id, ev, sizeof(*ev), &alarm_blob) )
+  { free(ev);
+    return NULL;
+  }
+  PL_register_atom(ev->symbol);
 
   return ev;
 }
@@ -327,8 +395,10 @@ unlinkEvent(Event ev)
 
   if ( ev->previous )
     ev->previous->next = ev->next;
-  else
+  else if ( sched->first == ev )
     sched->first = ev->next;
+  else
+    return;				/* not linked */
 
   if ( ev->next )
     ev->next->previous = ev->previous;
@@ -337,16 +407,24 @@ unlinkEvent(Event ev)
 }
 
 
+/* freeEvent() removes the event.  The memory is reclaimed by
+   release_alarm_symbol() after the Id is garbage collected.
+*/
+
 static void
 freeEvent(Event ev)
-{ unlinkEvent(ev);
+{ if ( ev->flags & EV_REMOVED )
+    return;
+
+  unlinkEvent(ev);
 
   if ( ev->goal )
-    PL_erase(ev->goal);
+  { PL_erase(ev->goal);
+    ev->goal = 0;
+  }
 
-  ev->magic = 0;
-
-  free(ev);
+  ev->flags |= EV_REMOVED;
+  PL_unregister_atom(ev->symbol);
 }
 
 
@@ -683,7 +761,9 @@ installEvent(Event ev)
     scheduler_running = TRUE;
   }
 
-  if ( (rc = insertEvent(ev)) )
+  if ( ev->flags & EV_REMOVED )
+    rc = ERR_EXISTENCE;
+  else if ( (rc = insertEvent(ev)) )
     pthread_cond_signal(&cond);
   UNLOCK();
 
@@ -694,6 +774,10 @@ installEvent(Event ev)
 static int
 uninstallEvent(Event ev)
 { LOCK();
+  if ( ev->flags & EV_REMOVED )
+  { UNLOCK();
+    return FALSE;
+  }
   if ( TheSchedule()->scheduled == ev )
     ev->flags |= EV_DONE;
   unlinkEvent(ev);
@@ -708,6 +792,10 @@ uninstallEvent(Event ev)
 static int
 removeEvent(Event ev)
 { LOCK();
+  if ( ev->flags & EV_REMOVED )		/* e.g., remove(true) alarm fired */
+  { UNLOCK();
+    return TRUE;
+  }
   if ( TheSchedule()->scheduled == ev )
     ev->flags |= EV_DONE;
   freeEvent(ev);
@@ -730,6 +818,8 @@ alarm_error(term_t alarm, int err)
     case ERR_PERMISSION:
       return pl_error(NULL, 0, "already installed", ERR_PERMISSION,
 		      alarm, "install", "alarm");
+    case ERR_EXISTENCE:
+      return existence_error_removed(alarm);
     default:
       assert(0);
       return FALSE;
@@ -737,42 +827,30 @@ alarm_error(term_t alarm, int err)
 }
 
 
-static int
-unify_timer(term_t t, Event ev)
-{ if ( !PL_is_variable(t) )
-    return PL_type_error("unbound", t);
-
-  return PL_unify_term(t,
-		       PL_FUNCTOR, FUNCTOR_alarm1,
-		         PL_POINTER, ev);
-}
-
-
 static bool
 get_timer(term_t t, Event *ev)
-{ if ( TheSchedule()->stop )
+{ PL_blob_t *type;
+  void *data;
+
+  if ( TheSchedule()->stop )
     return FALSE;
 
-  if ( PL_is_functor(t, FUNCTOR_alarm1) )
-  { term_t a = PL_new_term_ref();
-    void *p;
+  if ( PL_get_blob(t, &data, NULL, &type) && type == &alarm_blob )
+  { Event e = data;
 
-    _PL_get_arg(1, t, a);
-    if ( PL_get_pointer(a, &p) )
-    { Event e = p;
-
-      if ( e->magic == EV_MAGIC )
-      { *ev = e;
-        return TRUE;
-      } else
-      { return pl_error("get_timer", 1, NULL,
-			ERR_DOMAIN, t, "alarm"),false;
-      }
-    }
+    assert(e->magic == EV_MAGIC);
+    *ev = e;
+    return TRUE;
   }
 
   return pl_error("get_timer", 1, NULL,
 		  ERR_ARGTYPE, 1, t, "alarm"),false;
+}
+
+
+static bool
+existence_error_removed(term_t t)
+{ return pl_error(NULL, 0, "removed", ERR_EXISTENCE, "alarm", t),false;
 }
 
 
@@ -807,18 +885,13 @@ alarm4_gen(time_abs_rel abs_rel, term_t time, term_t callable,
   if ( !PL_strip_module(callable, &m, callable) )
     return FALSE;
 
-  if ( !(ev = allocEvent()) )
+  if ( !(ev = allocEvent(id)) )
     return FALSE;
 
   if (abs_rel==TIME_REL)
 	  setTimeEvent(ev, t);
   else
 	  setTimeEventAbs(ev,t);
-
-  if ( !unify_timer(id, ev) )
-  { freeEvent(ev);			/* not linked: no need to lock */
-    return FALSE;
-  }
 
   ev->flags = flags;
   ev->module = m;
@@ -899,7 +972,10 @@ uninstall_alarm(term_t alarm)
   if ( !get_timer(alarm, &ev) )
     return FALSE;
 
-  return uninstallEvent(ev);
+  if ( !uninstallEvent(ev) )
+    return existence_error_removed(alarm);
+
+  return TRUE;
 }
 
 
@@ -948,7 +1024,8 @@ current_alarms(term_t time, term_t goal, term_t id, term_t status,
     { UNLOCK();
       return FALSE;
     }
-    if ( !pthread_equal(self, ev->thread_id) )
+    if ( !pthread_equal(self, ev->thread_id) ||
+	 (ev->flags & EV_REMOVED) )
       ev = NULL;
     iterate = FALSE;
   } else
@@ -990,8 +1067,7 @@ current_alarms(term_t time, term_t goal, term_t id, term_t status,
     { if ( !PL_put_float(av+0, at) ||		/* time */
 	   !PL_put_variable(av+1)  ||		/* goal */
 	   !unify_event_goal(av+1, ev) ||
-	   !PL_put_variable(av+2) ||		/* id */
-	   !unify_timer(av+2, ev) ||
+	   !PL_put_atom(av+2, ev->symbol) ||	/* id */
 	   !PL_put_atom(av+3, s) ||		/* status */
 					        /* Create term */
 	   !PL_cons_functor_v(next, FUNCTOR_alarm4, av) ||
@@ -1021,7 +1097,6 @@ install_t
 install_time(void)
 { MODULE_user	  = PL_new_module(PL_new_atom("user"));
 
-  FUNCTOR_alarm1  = PL_new_functor(PL_new_atom("$alarm"), 1);
   FUNCTOR_alarm4  = PL_new_functor(PL_new_atom("alarm"), 4);
   FUNCTOR_module2 = PL_new_functor(PL_new_atom(":"), 2);
 

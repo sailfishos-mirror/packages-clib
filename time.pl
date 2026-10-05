@@ -89,7 +89,9 @@ use call_with_time_limit/2.
 %
 %           * remove(Bool)
 %           If =true= (default =false=), remove the alarm-event (as
-%           remove_alarm/1) after it has been fired.
+%           remove_alarm/1) after it has been fired.  Id remains
+%           valid, i.e., it is safe to call remove_alarm/1 on Id
+%           regardless of whether or not the alarm has fired.
 %           * install(Bool)
 %           If =false= (default =true=) do not install the alarm.
 %           It must be installed separately using install_alarm/1.
@@ -110,6 +112,8 @@ use call_with_time_limit/2.
 %   RelTime, the alarm  is  scheduled  at   the  RelTime  from  now.
 %   Otherwise it is scheduled on the   same (absolute) time on which
 %   is was created.
+%
+%   @error existence_error(alarm, Id) if the alarm has been removed.
 
 %!  uninstall_alarm(+Id) is det.
 %
@@ -117,10 +121,14 @@ use call_with_time_limit/2.
 %   that the alarm will not fire. The alarm can be rescheduled to
 %   the original time using install_alarm/1 or to a new time using
 %   install_alarm/2.
+%
+%   @error existence_error(alarm, Id) if the alarm has been removed.
 
 %!  remove_alarm(+Id) is det.
 %
 %   Remove an alarm.  If it has not yet been fired, it never will.
+%   Succeeds silently if the alarm was already removed, either by
+%   remove_alarm/1 or due to the remove(true) option of alarm/4.
 
 %!  current_alarm(?Time, :Goal, ?Id, ?Status) is nondet.
 %

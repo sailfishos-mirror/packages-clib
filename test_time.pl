@@ -71,6 +71,18 @@ test(bg) :-
     bg(5, 4).
 test(flood) :-
     flood_test.
+test(removed, Listed == false) :-
+    fired_alarm(Id),
+    remove_alarm(Id),
+    (   current_alarm(_, _, Id, _)
+    ->  Listed = true
+    ;   Listed = false
+    ).
+test(removed, error(existence_error(alarm, Id))) :-
+    fired_alarm(Id),
+    install_alarm(Id).
+test(stale_id) :-
+    stale_id_test(2000).
 
 :- end_tests(time).
 
@@ -157,6 +169,38 @@ flood_test :-
 
 got(X) :-
     assert(x(X)).
+
+
+                 /*******************************
+                 *         STALE ALARM IDS      *
+                 *******************************/
+
+%   Cancelling a remove(true) alarm that may have fired already must
+%   not affect the alarms of call_with_time_limit/2 in another thread.
+
+stale_id_test(N) :-
+    thread_create(cancel_fired(N), A),
+    thread_create(time_limited(N), B),
+    thread_join(A, SA),
+    thread_join(B, SB),
+    assertion(SA == true),
+    assertion(SB == true).
+
+fired_alarm(Id) :-
+    alarm(0.01, true, Id, [remove(true)]),
+    sleep(0.1).
+
+cancel_fired(N) :-
+    forall(between(1, N, _),
+           ( alarm(0.0001, true, Id, [remove(true)]),
+             sleep(0.0005),
+             remove_alarm(Id)
+           )).
+
+time_limited(N) :-
+    forall(between(1, N, _),
+           catch(call_with_time_limit(0.01, sleep(0.0003)),
+                 time_limit_exceeded, true)).
 
 
                  /*******************************
