@@ -4,8 +4,6 @@
     This example code is in the public domain
 */
 
-:- asserta(library_directory('.')).
-:- asserta(user:file_search_path(foreign, '.')).
 :- use_module(library(socket)).
 
                  /*******************************

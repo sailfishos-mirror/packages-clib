@@ -39,10 +39,6 @@
           ]).
 :- encoding(utf8).
 
-:- asserta(user:file_search_path(library, '../plunit')).
-:- asserta(user:file_search_path(library, '.')).
-:- asserta(user:file_search_path(foreign, '.')).
-
 :- use_module(library(uri)).
 :- use_module(library(debug)).
 :- use_module(library(plunit)).
