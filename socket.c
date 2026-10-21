@@ -85,7 +85,9 @@
 #endif
 
 static atom_t ATOM_address;
+#ifdef AF_UNIX
 static atom_t ATOM_af_unix;
+#endif
 static atom_t ATOM_atom;
 static atom_t ATOM_bindtodevice;
 static atom_t ATOM_broadcast;
@@ -97,10 +99,11 @@ static atom_t ATOM_file_no;
 static atom_t ATOM_host;
 static atom_t ATOM_inet6;
 static atom_t ATOM_inet;
-static atom_t ATOM_infinite;
 static atom_t ATOM_ip_add_membership;
 static atom_t ATOM_ip_drop_membership;
+#ifdef AF_UNIX
 static atom_t ATOM_local;
+#endif
 static atom_t ATOM_nodelay;
 static atom_t ATOM_nonblock;
 static atom_t ATOM_reuseaddr;
@@ -110,7 +113,9 @@ static atom_t ATOM_stream;
 static atom_t ATOM_string;
 static atom_t ATOM_term;
 static atom_t ATOM_type;
+#ifdef AF_UNIX
 static atom_t ATOM_unix;
+#endif
 
 static int get_socket_from_stream(term_t t, IOSTREAM **s, nbio_sock_t *sp);
 
@@ -1028,7 +1033,9 @@ install_socket(void)
   nbio_init("socket");
 
   MKATOM(address);
+#ifdef AF_UNIX
   MKATOM(af_unix);
+#endif
   MKATOM(atom);
   MKATOM(bindtodevice);
   MKATOM(broadcast);
@@ -1040,10 +1047,11 @@ install_socket(void)
   MKATOM(host);
   MKATOM(inet);
   MKATOM(inet6);
-  MKATOM(infinite);
   MKATOM(ip_add_membership);
   MKATOM(ip_drop_membership);
+#ifdef AF_UNIX
   MKATOM(local);
+#endif
   MKATOM(nodelay);
   MKATOM(nonblock);
   MKATOM(reuseaddr);
@@ -1053,7 +1061,9 @@ install_socket(void)
   MKATOM(string);
   MKATOM(term);
   MKATOM(type);
+#ifdef AF_UNIX
   MKATOM(unix);
+#endif
 
   PL_register_foreign("tcp_accept",           3, pl_accept,           0);
   PL_register_foreign("tcp_bind",             2, pl_bind,             0);

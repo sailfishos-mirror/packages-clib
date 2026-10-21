@@ -95,12 +95,6 @@ static atom_t ATOM_timeout;
 static atom_t ATOM_infinite;
 static atom_t ATOM_text;
 static atom_t ATOM_binary;
-static atom_t ATOM_octet;
-static atom_t ATOM_utf8;
-static atom_t ATOM_ascii;
-static atom_t ATOM_iso_latin_1;
-static atom_t ATOM_unicode_be;
-static atom_t ATOM_unicode_le;
 
 static functor_t FUNCTOR_error2;
 static functor_t FUNCTOR_process_error2;
@@ -109,7 +103,9 @@ static functor_t FUNCTOR_pipe1;
 static functor_t FUNCTOR_pipe2;
 static functor_t FUNCTOR_stream1;
 static functor_t FUNCTOR_exit1;
+#ifndef __WINDOWS__
 static functor_t FUNCTOR_killed1;
+#endif
 static functor_t FUNCTOR_eq2;		/* =/2 */
 static functor_t FUNCTOR_type1;
 static functor_t FUNCTOR_encoding1;
@@ -227,7 +223,9 @@ typedef enum create_method
   PCREATE_FORK
 } create_method;
 
+#ifndef __WINDOWS__
 static create_method create_process_method = PCREATE_SPAWN;
+#endif
 
 #ifdef __WINDOWS__
 static int win_command_line(term_t t, size_t arity,
@@ -2446,15 +2444,22 @@ process_set_method(term_t how)
 { char *s;
 
   if ( PL_get_chars(how, &s, CVT_ATOM|CVT_EXCEPTION) )
-  { if ( strcmp(s, "fork") == 0 )
-      create_process_method = PCREATE_FORK;
+  { create_method m;
+
+    if ( strcmp(s, "fork") == 0 )
+      m = PCREATE_FORK;
     else if ( strcmp(s, "vfork") == 0 )
-      create_process_method = PCREATE_VFORK;
+      m = PCREATE_VFORK;
     else if ( strcmp(s, "spawn") == 0 )
-      create_process_method = PCREATE_SPAWN;
+      m = PCREATE_SPAWN;
     else
       return PL_domain_error("process_create_method", how);
 
+#ifndef __WINDOWS__			/* Windows has only CreateProcess() */
+    create_process_method = m;
+#else
+    (void)m;
+#endif
     return TRUE;
   }
 
@@ -2482,12 +2487,6 @@ install_process()
   MKATOM(infinite);
   MKATOM(text);
   MKATOM(binary);
-  MKATOM(octet);
-  MKATOM(utf8);
-  MKATOM(ascii);
-  MKATOM(iso_latin_1);
-  MKATOM(unicode_be);
-  MKATOM(unicode_le);
 
   MKFUNCTOR(pipe, 1);
   MKFUNCTOR(pipe, 2);
@@ -2498,7 +2497,9 @@ install_process()
   MKFUNCTOR(process_error, 2);
   MKFUNCTOR(system_error, 2);
   MKFUNCTOR(exit, 1);
+#ifndef __WINDOWS__
   MKFUNCTOR(killed, 1);
+#endif
 
   FUNCTOR_eq2 = PL_new_functor(PL_new_atom("="), 2);
 

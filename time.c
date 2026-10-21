@@ -168,7 +168,6 @@ print_trace (void)
 
 static void	on_alarm(int sig);
 
-static module_t	   MODULE_user;
 static atom_t	   ATOM_done;
 static atom_t	   ATOM_next;
 static atom_t	   ATOM_scheduled;
@@ -1095,9 +1094,7 @@ current_alarms(term_t time, term_t goal, term_t id, term_t status,
 
 install_t
 install_time(void)
-{ MODULE_user	  = PL_new_module(PL_new_atom("user"));
-
-  FUNCTOR_alarm4  = PL_new_functor(PL_new_atom("alarm"), 4);
+{ FUNCTOR_alarm4  = PL_new_functor(PL_new_atom("alarm"), 4);
   FUNCTOR_module2 = PL_new_functor(PL_new_atom(":"), 2);
 
   ATOM_done	  = PL_new_atom("done");
